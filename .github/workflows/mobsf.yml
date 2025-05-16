@@ -1,26 +1,18 @@
-name: MobSF Scan
+name: MobSF Analysis
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '**.apk'
-      - '**.ipa'
-  pull_request:
-    paths:
-      - '**.apk'
-      - '**.ipa'
 
 jobs:
-  mobsf_scan:
+  analyze:
     runs-on: ubuntu-latest
 
     env:
-      MOBSF_URL: http://4.213.177.237:8000
+      MOBSF_URL: ${{ secrets.MOBSF_URL }}
       MOBSF_API_KEY: ${{ secrets.MOBSF_API_KEY }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Find APK and IPA files
@@ -28,63 +20,56 @@ jobs:
         run: |
           apk_files=$(find . -type f -name "*.apk")
           ipa_files=$(find . -type f -name "*.ipa")
+
           echo "apk_files<<EOF" >> $GITHUB_OUTPUT
           echo "$apk_files" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+
           echo "ipa_files<<EOF" >> $GITHUB_OUTPUT
           echo "$ipa_files" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Install dependencies
-        run: sudo apt-get install -y curl jq
-
       - name: Scan files with MobSF
         run: |
           scan_file() {
-            file=$1
-            echo "Uploading $file..."
+            file="$1"
+            echo "📱 Uploading $file..."
 
             response=$(curl -s -X POST "$MOBSF_URL/api/v1/upload" \
               -H "Authorization: $MOBSF_API_KEY" \
-              -F "file=@$file")
+              -F "file=@\"$file\"")
 
             scan_hash=$(echo "$response" | jq -r '.hash')
-            if [[ "$scan_hash" == "null" ]]; then
-              echo "❌ Upload failed. Response: $response"
+            if [[ "$scan_hash" == "null" || -z "$scan_hash" ]]; then
+              echo "❌ Upload failed for $file. Response: $response"
               exit 1
             fi
 
-            echo "Analyzing $file..."
+            echo "🔍 Analyzing $file..."
             curl -s -X POST "$MOBSF_URL/api/v1/scan" \
               -H "Authorization: $MOBSF_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"hash\":\"$scan_hash\"}" > /dev/null
 
-            echo "Downloading JSON report..."
+            echo "📝 Downloading JSON report..."
             curl -s -X POST "$MOBSF_URL/api/v1/report_json" \
               -H "Authorization: $MOBSF_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"hash\":\"$scan_hash\"}" -o "$(basename "$file").json"
 
-            echo "Downloading PDF report..."
+            echo "📄 Downloading PDF report..."
             curl -s -X POST "$MOBSF_URL/api/v1/download_pdf" \
               -H "Authorization: $MOBSF_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"hash\":\"$scan_hash\"}" -o "$(basename "$file").pdf"
           }
 
-          for file in ${{ steps.find_files.outputs.apk_files }}; do
+          echo "📦 Scanning APK files..."
+          while IFS= read -r file; do
             scan_file "$file"
-          done
+          done <<< "${{ steps.find_files.outputs.apk_files }}"
 
-          for file in ${{ steps.find_files.outputs.ipa_files }}; do
+          echo "📦 Scanning IPA files..."
+          while IFS= read -r file; do
             scan_file "$file"
-          done
-
-      - name: Upload MobSF reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: mobsf-reports
-          path: |
-            *.json
-            *.pdf
+          done <<< "${{ steps.find_files.outputs.ipa_files }}"
