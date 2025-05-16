@@ -1,73 +1,81 @@
-name: MobSF Mobile Scan
+name: MobSF Scan
 
 on:
-  push:
-    paths:
-      - '**.apk'
-      - '**.ipa'
-  pull_request:
-    paths:
-      - '**.apk'
-      - '**.ipa'
   workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   mobsf-scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Scan mobile apps with MobSF
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Start MobSF Docker container
-        run: |
-          docker run -d --name mobsf -p 8000:8000 opensecurity/mobile-security-framework-mobsf
-          echo "Waiting for MobSF to be ready..."
-          sleep 60
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl
-
-      - name: Get MobSF API key
-        id: get_key
-        run: |
-          API_KEY=$(curl -s http://localhost:8000/api/v1/apikey/)
-          echo "api_key=$API_KEY" >> $GITHUB_OUTPUT
-
-      - name: Find APK/IPA files
+      - name: Find APK and IPA files
         id: find_files
         run: |
-          files=$(find . -type f \( -iname "*.apk" -o -iname "*.ipa" \))
-          echo "$files" > files.txt
-          echo "Found files:"
-          cat files.txt
+          apk_files=$(find . -type f -name "*.apk")
+          ipa_files=$(find . -type f -name "*.ipa")
+          echo "apk_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$apk_files" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "ipa_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$ipa_files" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Scan files
+      - name: Scan APK and IPA files with MobSF
+        env:
+          MOBSF_URL: ${{ secrets.MOBSF_URL }}
+          MOBSF_API_KEY: ${{ secrets.MOBSF_API_KEY }}
         run: |
-          mkdir -p mobsf-reports
-          while IFS= read -r file; do
-            echo "Uploading $file to MobSF..."
-            response=$(curl -s -X POST "http://localhost:8000/api/v1/upload" \
-              -H "Authorization: ${{ steps.get_key.outputs.api_key }}" \
+          scan() {
+            file="$1"
+            echo "Uploading $file..."
+            response=$(curl -s -X POST "$MOBSF_URL/api/v1/upload" \
+              -H "Authorization: $MOBSF_API_KEY" \
               -F "file=@$file")
 
-            scan_hash=$(echo $response | jq -r '.hash')
-            echo "File hash: $scan_hash"
+            scan_hash=$(echo "$response" | jq -r '.hash')
+            if [ "$scan_hash" == "null" ]; then
+              echo "Failed to upload $file"
+              exit 1
+            fi
 
-            echo "Getting JSON report..."
-            curl -s -X POST "http://localhost:8000/api/v1/report_json" \
-              -H "Authorization: ${{ steps.get_key.outputs.api_key }}" \
+            echo "Uploaded successfully. Hash: $scan_hash"
+
+            echo "Initiating scan..."
+            curl -s -X POST "$MOBSF_URL/api/v1/scan" \
+              -H "Authorization: $MOBSF_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"hash\":\"$scan_hash\"}"
+
+            echo "Getting JSON report for $file..."
+            curl -s -X POST "$MOBSF_URL/api/v1/report_json" \
+              -H "Authorization: $MOBSF_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"hash\":\"$scan_hash\"}" \
-              -o "mobsf-reports/$(basename "$file").json"
+              -o "$(basename "$file").json"
+          }
 
-          done < files.txt
+          # Scan all APKs
+          echo "${{ steps.find_files.outputs.apk_files }}" | while read -r apk; do
+            [ -z "$apk" ] && continue
+            scan "$apk"
+          done
 
-      - name: Upload MobSF reports
-        uses: actions/upload-artifact@v4
+          # Scan all IPAs
+          echo "${{ steps.find_files.outputs.ipa_files }}" | while read -r ipa; do
+            [ -z "$ipa" ] && continue
+            scan "$ipa"
+          done
+
+      - name: Upload MobSF Reports
+        uses: actions/upload-artifact@v3
         with:
-          name: mobsf-scan-reports
-          path: mobsf-reports/
+          name: mobsf-reports
+          path: |
+            *.json
