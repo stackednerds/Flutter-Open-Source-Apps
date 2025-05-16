@@ -77,7 +77,7 @@ jobs:
           done < ipa_files.txt
 
       - name: Upload MobSF Reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: mobsf-reports
           path: |
