@@ -1,0 +1,73 @@
+name: MobSF Mobile Scan
+
+on:
+  push:
+    paths:
+      - '**.apk'
+      - '**.ipa'
+  pull_request:
+    paths:
+      - '**.apk'
+      - '**.ipa'
+  workflow_dispatch:
+
+jobs:
+  mobsf-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Start MobSF Docker container
+        run: |
+          docker run -d --name mobsf -p 8000:8000 opensecurity/mobile-security-framework-mobsf
+          echo "Waiting for MobSF to be ready..."
+          sleep 60
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Get MobSF API key
+        id: get_key
+        run: |
+          API_KEY=$(curl -s http://localhost:8000/api/v1/apikey/)
+          echo "api_key=$API_KEY" >> $GITHUB_OUTPUT
+
+      - name: Find APK/IPA files
+        id: find_files
+        run: |
+          files=$(find . -type f \( -iname "*.apk" -o -iname "*.ipa" \))
+          echo "$files" > files.txt
+          echo "Found files:"
+          cat files.txt
+
+      - name: Scan files
+        run: |
+          mkdir -p mobsf-reports
+          while IFS= read -r file; do
+            echo "Uploading $file to MobSF..."
+            response=$(curl -s -X POST "http://localhost:8000/api/v1/upload" \
+              -H "Authorization: ${{ steps.get_key.outputs.api_key }}" \
+              -F "file=@$file")
+
+            scan_hash=$(echo $response | jq -r '.hash')
+            echo "File hash: $scan_hash"
+
+            echo "Getting JSON report..."
+            curl -s -X POST "http://localhost:8000/api/v1/report_json" \
+              -H "Authorization: ${{ steps.get_key.outputs.api_key }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"hash\":\"$scan_hash\"}" \
+              -o "mobsf-reports/$(basename "$file").json"
+
+          done < files.txt
+
+      - name: Upload MobSF reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobsf-scan-reports
+          path: mobsf-reports/
