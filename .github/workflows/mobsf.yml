@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      MOBSF_URL: https://your-public-mobsf-url.com  # ← Replace with your public MobSF URL
-      MOBSF_API_KEY: ${{ secrets.MOBSF_API_KEY }}   # ← Store your key in GitHub Secrets
+      MOBSF_URL: ${{ secrets.MOBSF_URL }}
+      MOBSF_API_KEY: ${{ secrets.MOBSF_API_KEY }}
 
     steps:
       - name: Checkout repository
@@ -20,16 +20,8 @@ jobs:
       - name: Find APK/IPA files
         id: find_files
         run: |
-          apk_files=$(find . -type f -name "*.apk")
-          ipa_files=$(find . -type f -name "*.ipa")
-
-          echo "apk_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$apk_files" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          echo "ipa_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$ipa_files" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          find . -type f -name "*.apk" > apk_files.txt
+          find . -type f -name "*.ipa" > ipa_files.txt
 
       - name: Scan files with MobSF
         run: |
@@ -74,18 +66,18 @@ jobs:
               -o "$report_name"
           }
 
-          # Run scan for all APK files
-          for file in ${{ steps.find_files.outputs.apk_files }}; do
+          echo "Scanning APK files..."
+          while IFS= read -r file; do
             scan "$file"
-          done
+          done < apk_files.txt
 
-          # Run scan for all IPA files
-          for file in ${{ steps.find_files.outputs.ipa_files }}; do
+          echo "Scanning IPA files..."
+          while IFS= read -r file; do
             scan "$file"
-          done
+          done < ipa_files.txt
 
       - name: Upload MobSF Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: mobsf-reports
           path: |
